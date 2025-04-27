@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+service TransferFileService{
+
+	rpc transferFile(stream transferRequest) returns (transferResponse) {}
+
+	message transferRequest {
+		byte data = 1;
+		int32 chunk_number = 2;
+		string filename = 3;
+	}
+
+	message transferResponse {
+		bool success = 1;	
+		string status_message = 2;
+	}
+}
+
