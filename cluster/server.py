@@ -4,11 +4,11 @@ import grpc
 import logging
 import asyncio
 
-DIR_FOR_FILES = "~/Desktop/uploads"
+DIR_FOR_FILES = "/tmp"
 
 class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
 
-    def transferFile(self, request_iterator, context):
+    def UploadFile(self, request_iterator, context):
         stream_iterator = iter(request_iterator) 
         try:
             stream_data = next(stream_iterator)
@@ -19,7 +19,7 @@ class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
         current_chunk = 0
         if stream_data.chunk_number == current_chunk:
             filename = stream_data.filename
-            filepath = f"DIR_FOR_FILES/{filename}"
+            filepath = f"{DIR_FOR_FILES}/{filename}"
         else:
             return transfer_file_pb2.UploadResponse(success=False, status_message="Chunk number not matching")
 
@@ -34,6 +34,19 @@ class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
                 current_chunk += 1
         return transfer_file_pb2.UploadResponse(success=True, status_message="Stream parse finished")
 
+    def DownloadFile(self, request, context):
+        filename = request.filename
+        filepath = f"{DIR_FOR_FILES}/{filename}"
+
+        chunk_number = 0
+        chunk_size = 1024*1024
+        with open(filepath, "rb") as file_pointer:
+            while chunk := file_pointer.read(chunk_size):
+                yield transfer_file_pb2.DownloadResponse(
+                    data=chunk,
+                    chunk_number=chunk_number,
+                ) 
+                chunk_number += 1
 
 async def serve() -> None:
     server = grpc.aio.server()
