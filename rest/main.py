@@ -1,6 +1,6 @@
 import grpc
-import rest_to_main_pb2
-import rest_to_main_pb2_grpc
+import transfer_file_pb2
+import transfer_file_pb2_grpc
 from fastapi import FastAPI
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
@@ -16,7 +16,7 @@ async def generate_file_chunks(file: UploadFile, filename: str, chunk_size=1024 
         chunk = await file.read(chunk_size)
         if not chunk:
             break
-        yield rest_to_main_pb2.transferRequest(
+        yield transfer_file_pb2.UploadRequest(
             data=chunk,
             chunk_number=chunk_number,
             filename=filename if chunk_number == 0 else ""
@@ -33,9 +33,9 @@ async def upload_txt(file: UploadFile = File(...)):
     
     # TODo: localhost needs to b changed to master IP when we have multiple nodes
     async with grpc.aio.insecure_channel('localhost:50051') as channel:
-        stub = rest_to_main_pb2_grpc.TransferFileServiceStub(channel)
+        stub = transfer_file_pb2_grpc.TransferFileServiceStub(channel)
         
-        response = await stub.transferFile(generate_file_chunks(file, file.filename))
+        response = await stub.UploadFile(generate_file_chunks(file, file.filename))
         
         if response.success:
             return {"message": response.status_message}
@@ -47,9 +47,9 @@ async def upload_txt(file: UploadFile = File(...)):
 @app.get("/download-txt/{filename}")
 async def download_txt(filename: str):
     async with grpc.aio.insecure_channel('localhost:50051') as channel:
-        stub = rest_to_main_pb2_grpc.TransferFileServiceStub(channel)
+        stub = transfer_file_pb2_grpc.TransferFileServiceStub(channel)
         
-        request = rest_to_main_pb2.FileRequest(filename=filename)
+        request = transfer_file_pb2.FileRequest(filename=filename)
         response = await stub.getFile(request)  
         
         file_content = BytesIO()
