@@ -1,9 +1,9 @@
-import grpc
+import grpc, io
 import transfer_file_pb2
 import transfer_file_pb2_grpc
 from fastapi import FastAPI
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 
 app = FastAPI()
@@ -49,11 +49,11 @@ async def download_txt(filename: str):
     async with grpc.aio.insecure_channel('localhost:50051') as channel:
         stub = transfer_file_pb2_grpc.TransferFileServiceStub(channel)
         
-        request = transfer_file_pb2.FileRequest(filename=filename)
-        response = await stub.getFile(request)  
+        request = transfer_file_pb2.DownloadRequest(filename=filename)
+        response =  stub.DownloadFile(request)  
         
-        file_content = BytesIO()
-        
+        file_content = io.BytesIO()
+
         async for chunk in response:
             file_content.write(chunk.data) 
         
