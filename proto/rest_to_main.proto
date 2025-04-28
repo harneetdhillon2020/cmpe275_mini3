@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-service TransferFileService{
+service TransferFileService {
 	rpc transferFile(stream transferRequest) returns (transferResponse) {}
 }
 
