@@ -2,6 +2,7 @@ syntax = "proto3";
 
 service TransferFileService {
 	rpc transferFile(stream transferRequest) returns (transferResponse) {}
+	rpc retrieveFile(retrieveRequest) returns (stream retrieveResponse) {}
 }
 
 	message transferRequest {
@@ -13,4 +14,13 @@ service TransferFileService {
 	message transferResponse {
 		bool success = 1;	
 		string status_message = 2;
+	}
+
+	message retrieveRequest {
+		string filename = 1;
+	}
+
+	message retrieveResponse {
+		bytes data = 1;
+		int32 chunk_number = 2;
 	}
