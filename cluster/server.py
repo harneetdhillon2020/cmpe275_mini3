@@ -1,3 +1,5 @@
+import heartbeat_pb2
+import heartbeat_pb2_grpc
 import transfer_file_pb2
 import transfer_file_pb2_grpc
 import os
@@ -5,7 +7,7 @@ import grpc
 import logging
 import asyncio
 
-class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
+class TransferFileService(transfer_file_pb2_grpc.TransferFileServiceServicer):
     def __init__(self, dir_for_files):
         self.dir_for_files = dir_for_files
 
@@ -48,6 +50,11 @@ class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
                 ) 
                 chunk_number += 1
 
+class HeartBeatService(heartbeat_pb2_grpc.HeartBeatServiceServicer):
+    def HeartBeat(self, request, context):
+        print("Heartbeat from: ", request.pid, "storage in MB: ", request.storage)
+        return heartbeat_pb2.HeartBeatResponse(status=True)
+
 class ServerNode:
     def __init__(self):
         self.process_id = os.getpid()
@@ -61,7 +68,8 @@ class ServerNode:
 
     async def serve(self):
         server = grpc.aio.server()
-        transfer_file_pb2_grpc.add_TransferFileServiceServicer_to_server(TransferFileServer(self.dir_for_files), server)
+        transfer_file_pb2_grpc.add_TransferFileServiceServicer_to_server(TransferFileService(self.dir_for_files), server)
+        heartbeat_pb2_grpc.add_HeartBeatServiceServicer_to_server(HeartBeatService(), server)
         server.add_insecure_port(self.listen_addr)
         logging.info("Starting server on %s", self.listen_addr)
         await server.start()
