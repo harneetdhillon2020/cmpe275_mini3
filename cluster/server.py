@@ -1,17 +1,14 @@
 import transfer_file_pb2
 import transfer_file_pb2_grpc
+import os
 import grpc
 import logging
 import asyncio
-import os
-
-process_id = os.getpid()
-DIR_FOR_FILES = f"""/tmp/{process_id}"""
-print(f"""File directory for files: {DIR_FOR_FILES}""")
-if not os.path.exists(DIR_FOR_FILES):
-    os.makedirs(DIR_FOR_FILES)
 
 class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
+    def __init__(self, dir_for_files):
+        self.dir_for_files = dir_for_files
+
     def UploadFile(self, request_iterator, context):
         stream_iterator = iter(request_iterator) 
         try:
@@ -23,7 +20,7 @@ class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
         current_chunk = 0
         if stream_data.chunk_number == current_chunk:
             filename = stream_data.filename
-            filepath = f"{DIR_FOR_FILES}/{filename}"
+            filepath = f"{self.dir_for_files}/{filename}"
         else:
             return transfer_file_pb2.UploadResponse(success=False, status_message="Chunk number not matching")
 
@@ -40,7 +37,7 @@ class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
 
     def DownloadFile(self, request, context):
         filename = request.filename
-        filepath = f"{DIR_FOR_FILES}/{filename}"
+        filepath = f"{self.dir_for_files}/{filename}"
         chunk_number = 0
         chunk_size = 1024*1024
         with open(filepath, "rb") as file_pointer:
@@ -51,15 +48,26 @@ class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
                 ) 
                 chunk_number += 1
 
-async def serve() -> None:
-    server = grpc.aio.server()
-    transfer_file_pb2_grpc.add_TransferFileServiceServicer_to_server(TransferFileServer(), server)
-    listen_addr = "[::]:50051"
-    server.add_insecure_port(listen_addr)
-    logging.info("Starting server on %s", listen_addr)
-    await server.start()
-    await server.wait_for_termination()
+class ServerNode:
+    def __init__(self):
+        self.process_id = os.getpid()
+        self.dir_for_files = f"""/tmp/{self.process_id}"""
+        if not os.path.exists(self.dir_for_files):
+            os.makedirs(self.dir_for_files)
+        self.listen_addr = "[::]:50051"
+        
+    def print_dir_for_files(self) -> None:
+        print(self.dir_for_files)
+
+    async def serve(self):
+        server = grpc.aio.server()
+        transfer_file_pb2_grpc.add_TransferFileServiceServicer_to_server(TransferFileServer(self.dir_for_files), server)
+        server.add_insecure_port(self.listen_addr)
+        logging.info("Starting server on %s", self.listen_addr)
+        await server.start()
+        await server.wait_for_termination()
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(serve())
+    asyncio.run(ServerNode().serve())
