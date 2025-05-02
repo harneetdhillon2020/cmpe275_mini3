@@ -63,6 +63,4 @@ async def download_txt(filename: str):
         return StreamingResponse(file_content, media_type="text/plain", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
-
-
 # Master Node -> backend post request to update new master
