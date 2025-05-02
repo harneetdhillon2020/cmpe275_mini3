@@ -3,11 +3,15 @@ import transfer_file_pb2_grpc
 import grpc
 import logging
 import asyncio
+import os
 
-DIR_FOR_FILES = "/tmp"
+process_id = os.getpid()
+DIR_FOR_FILES = f"""/tmp/{process_id}"""
+print(f"""File directory for files: {DIR_FOR_FILES}""")
+if not os.path.exists(DIR_FOR_FILES):
+    os.makedirs(DIR_FOR_FILES)
 
 class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
-
     def UploadFile(self, request_iterator, context):
         stream_iterator = iter(request_iterator) 
         try:
@@ -23,7 +27,7 @@ class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
         else:
             return transfer_file_pb2.UploadResponse(success=False, status_message="Chunk number not matching")
 
-        # Open up a file in the OS and write, each time we write, we should update the chunk number to the next and check if its matching. Hope it works
+        # Open up a file in the OS and write, each time we write, we should update the chunk number to the next and check if its matching.
         with open(filepath, "wb") as file_pointer:
             file_pointer.write(stream_data.data)
             current_chunk += 1
@@ -37,7 +41,6 @@ class TransferFileServer(transfer_file_pb2_grpc.TransferFileServiceServicer):
     def DownloadFile(self, request, context):
         filename = request.filename
         filepath = f"{DIR_FOR_FILES}/{filename}"
-
         chunk_number = 0
         chunk_size = 1024*1024
         with open(filepath, "rb") as file_pointer:
@@ -57,10 +60,6 @@ async def serve() -> None:
     await server.start()
     await server.wait_for_termination()
 
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     asyncio.run(serve())
-
-
-
