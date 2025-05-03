@@ -2,12 +2,23 @@ import grpc
 import io
 import transfer_file_pb2
 import transfer_file_pb2_grpc
-from fastapi import FastAPI
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.responses import JSONResponse, StreamingResponse
 
 
 app = FastAPI()
+
+# Default Master Node IP
+master_node_ip = "0.0.0.0:50051"
+
+# Device Registry: TODO: maybe put this in a file later
+registry_ip = [ 
+  master_node_ip,
+  "0.0.0.0:50052",
+  "0.0.0.0:50053",
+  "0.0.0.0:50054",
+  "0.0.0.0:50055"
+]
 
 # Function for chunking file to send over gRPC
 # The full file is breaken down into chunks and each chunk is then further broken down and iterated over 
@@ -32,8 +43,7 @@ async def upload_txt(file: UploadFile = File(...)):
     if not file.filename.endswith(".txt"):
         return JSONResponse(content={"error": "Only .txt files are allowed"}, status_code=400)
     
-    # TODo: localhost needs to b changed to master IP when we have multiple nodes
-    async with grpc.aio.insecure_channel('localhost:50051') as channel:
+    async with grpc.aio.insecure_channel(master_node_ip) as channel:
         stub = transfer_file_pb2_grpc.TransferFileServiceStub(channel)
         
         response = await stub.UploadFile(generate_file_chunks(file, file.filename))
@@ -47,7 +57,7 @@ async def upload_txt(file: UploadFile = File(...)):
 # send .txt file name and file is fetched and downloaded
 @app.get("/download-txt/{filename}")
 async def download_txt(filename: str):
-    async with grpc.aio.insecure_channel('localhost:50051') as channel:
+    async with grpc.aio.insecure_channel(master_node_ip) as channel:
         stub = transfer_file_pb2_grpc.TransferFileServiceStub(channel)
         
         request = transfer_file_pb2.DownloadRequest(filename=filename)
@@ -62,5 +72,18 @@ async def download_txt(filename: str):
 
         return StreamingResponse(file_content, media_type="text/plain", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
+# Master Get
+@app.get("/master")
+async def get_master_ip():
+    return master_node_ip
 
 # Master Node -> backend post request to update new master
+@app.post("/master")
+async def post_master_ip(ip: str = Body(..., embed=True)):
+    global master_node_ip
+    master_node_ip = ip
+    return f"""New master node ip @ {master_node_ip}"""
+    
+@app.get("/registry") 
+async def get_registry():
+    return registry_ip

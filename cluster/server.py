@@ -59,13 +59,13 @@ class HeartBeatService(heartbeat_pb2_grpc.HeartBeatServiceServicer):
 class ServerNode:
     def __init__(self, port):
         self.process_id = os.getpid()
-        self.dir_for_files = f"""/tmp/{self.process_id}"""
-        if not os.path.exists(self.dir_for_files):
-            os.makedirs(self.dir_for_files)
         self.listen_addr = "0.0.0.0"
         self.listen_port = port 
-
-        
+        self.is_master = False
+        self.dir_for_files = f"""/tmp/{self.process_id}-{self.listen_port}"""
+        if not os.path.exists(self.dir_for_files):
+            os.makedirs(self.dir_for_files)
+                
     def print_dir_for_files(self) -> None:
         print(self.dir_for_files)
 
@@ -75,6 +75,7 @@ class ServerNode:
         heartbeat_pb2_grpc.add_HeartBeatServiceServicer_to_server(HeartBeatService(), server)
         server.add_insecure_port(f"""{self.listen_addr}:{self.listen_port}""")
         logging.info("Starting server on %s , port %s", self.listen_addr, self.listen_port)
+        logging.info("File directory for this server located at %s", self.dir_for_files)
         await server.start()
         await server.wait_for_termination()
 
