@@ -2,6 +2,7 @@ import heartbeat_pb2
 import heartbeat_pb2_grpc
 import transfer_file_pb2
 import transfer_file_pb2_grpc
+
 import argparse
 import os
 import grpc
@@ -57,35 +58,42 @@ class HeartBeatService(heartbeat_pb2_grpc.HeartBeatServiceServicer):
         return heartbeat_pb2.HeartBeatResponse(status=True)
 
 class ServerNode:
-    def __init__(self, port):
-        self.process_id = os.getpid()
-        self.listen_addr = "0.0.0.0"
-        self.listen_port = port 
-        self.is_master = False
-        self.dir_for_files = f"""/tmp/{self.process_id}-{self.listen_port}"""
-        if not os.path.exists(self.dir_for_files):
-            os.makedirs(self.dir_for_files)
-                
+    def __init__(self, port, rest_ip_addr):
+
+        # Initialized Immutable Fields. These should not be changed, denoted by _ prefix.
+        self._process_id = os.getpid()
+        self._listen_addr = "0.0.0.0"
+        self._listen_port = port 
+        self._rest_ip_addr = rest_ip_addr
+        self._dir_for_files = f"""/tmp/{self._process_id}-{self._listen_port}"""
+        if not os.path.exists(self._dir_for_files):
+            os.makedirs(self._dir_for_files)
+
+        # Mutable Parameters
+        # Use a lock to when dealing with setting/getting these state fields. Just in case of weird race conditions.
+        self._master_lock = asyncio.Lock()
+        self.is_master: bool = False
+        self.master_addr: str = self._listen_addr
+        self.master_port: int = self._listen_port               
+
+
     def print_dir_for_files(self) -> None:
-        print(self.dir_for_files)
+        print(self._dir_for_files)
 
     async def serve(self):
         server = grpc.aio.server()
-        transfer_file_pb2_grpc.add_TransferFileServiceServicer_to_server(TransferFileService(self.dir_for_files), server)
+        transfer_file_pb2_grpc.add_TransferFileServiceServicer_to_server(TransferFileService(self._dir_for_files), server)
         heartbeat_pb2_grpc.add_HeartBeatServiceServicer_to_server(HeartBeatService(), server)
-        server.add_insecure_port(f"""{self.listen_addr}:{self.listen_port}""")
-        logging.info("Starting server on %s , port %s", self.listen_addr, self.listen_port)
-        logging.info("File directory for this server located at %s", self.dir_for_files)
+        server.add_insecure_port(f"""{self._listen_addr}:{self._listen_port}""")
+        logging.info("Starting server on %s , port %s", self._listen_addr, self._listen_port)
+        logging.info("File directory for this server located at %s", self._dir_for_files)
         await server.start()
         await server.wait_for_termination()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-    "--port",
-    type=int,
-    default=50051
-    )
+    parser.add_argument("--port", type=int, default=50051)
+    parser.add_argument("--rest_ip", type=str, default="0.0.0.0:8000")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(ServerNode(args.port).serve())
+    asyncio.run(ServerNode(args.port, args.rest_ip).serve())
