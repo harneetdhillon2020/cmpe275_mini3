@@ -2,6 +2,7 @@ import heartbeat_pb2
 import heartbeat_pb2_grpc
 import transfer_file_pb2
 import transfer_file_pb2_grpc
+import argparse
 import os
 import grpc
 import logging
@@ -56,12 +57,14 @@ class HeartBeatService(heartbeat_pb2_grpc.HeartBeatServiceServicer):
         return heartbeat_pb2.HeartBeatResponse(status=True)
 
 class ServerNode:
-    def __init__(self):
+    def __init__(self, port):
         self.process_id = os.getpid()
         self.dir_for_files = f"""/tmp/{self.process_id}"""
         if not os.path.exists(self.dir_for_files):
             os.makedirs(self.dir_for_files)
-        self.listen_addr = "[::]:50051"
+        self.listen_addr = "0.0.0.0"
+        self.listen_port = port 
+
         
     def print_dir_for_files(self) -> None:
         print(self.dir_for_files)
@@ -70,11 +73,18 @@ class ServerNode:
         server = grpc.aio.server()
         transfer_file_pb2_grpc.add_TransferFileServiceServicer_to_server(TransferFileService(self.dir_for_files), server)
         heartbeat_pb2_grpc.add_HeartBeatServiceServicer_to_server(HeartBeatService(), server)
-        server.add_insecure_port(self.listen_addr)
-        logging.info("Starting server on %s", self.listen_addr)
+        server.add_insecure_port(f"""{self.listen_addr}:{self.listen_port}""")
+        logging.info("Starting server on %s , port %s", self.listen_addr, self.listen_port)
         await server.start()
         await server.wait_for_termination()
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+    "--port",
+    type=int,
+    default=50051
+    )
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(ServerNode().serve())
+    asyncio.run(ServerNode(args.port).serve())
