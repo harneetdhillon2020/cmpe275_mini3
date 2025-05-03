@@ -8,6 +8,7 @@ import os
 import grpc
 import logging
 import asyncio
+import requests
 
 class TransferFileService(transfer_file_pb2_grpc.TransferFileServiceServicer):
     def __init__(self, dir_for_files):
@@ -54,8 +55,8 @@ class TransferFileService(transfer_file_pb2_grpc.TransferFileServiceServicer):
 
 class HeartBeatService(heartbeat_pb2_grpc.HeartBeatServiceServicer):
     def HeartBeat(self, request, context):
-        print("Heartbeat from: ", request.pid, "storage in MB: ", request.storage)
-        return heartbeat_pb2.HeartBeatResponse(status=True)
+        print("Heartbeat from: ", request.ip_address, " pid:" ,request.pid, "storage in MB: ", request.storage)
+        return heartbeat_pb2.HeartBeatResponse(ack=True)
 
 class ServerNode:
     def __init__(self, port, rest_ip_addr):
@@ -74,11 +75,23 @@ class ServerNode:
         self._master_lock = asyncio.Lock()
         self.is_master: bool = False
         self.master_addr: str = self._listen_addr
-        self.master_port: int = self._listen_port               
+        self.master_port: str = self._listen_port               
 
 
     def print_dir_for_files(self) -> None:
         print(self._dir_for_files)
+
+    async def getRegistry(self):
+        registry_request = requests.get(f"""http://{self._rest_ip_addr}/registry""")
+        return (registry_request.text)
+    
+    async def heartBeat(self):
+        while(True):
+            async with grpc.aio.insecure_channel(self.master_addr+":"+self.master_port) as channel:
+                stub = heartbeat_pb2_grpc.HeartBeatServiceStub(channel)
+                response = await stub.HeartBeat(heartbeat_pb2.HeartBeatRequest(pid=self._process_id, storage=0, ip_address=self._listen_addr+":"+self._listen_port), timeout=3) 
+                print(f"""Heart beating {self.master_addr}:{self.master_port} from {self._listen_addr}:{self._listen_port}. ACK = {response.ack}""")
+            await asyncio.sleep(10)
 
     async def serve(self):
         server = grpc.aio.server()
@@ -88,12 +101,14 @@ class ServerNode:
         logging.info("Starting server on %s , port %s", self._listen_addr, self._listen_port)
         logging.info("File directory for this server located at %s", self._dir_for_files)
         await server.start()
+        asyncio.create_task(self.heartBeat())
         await server.wait_for_termination()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=50051)
+    parser.add_argument("--port", type=str, default="50051")
     parser.add_argument("--rest_ip", type=str, default="0.0.0.0:8000")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     asyncio.run(ServerNode(args.port, args.rest_ip).serve())
+

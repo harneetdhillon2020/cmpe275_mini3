@@ -7,8 +7,9 @@ service HeartBeatService {
 message HeartBeatRequest {
 	int32 storage = 1;	
 	int32 pid = 2;
+	string ip_address = 3;
 }
 
 message HeartBeatResponse {
-	bool status = 1;	
+	bool ack = 1;	
 }
