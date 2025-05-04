@@ -17,7 +17,9 @@ registry_ip = [
   "0.0.0.0:50053",
   "0.0.0.0:50054",
   "0.0.0.0:50055"
-]
+ ]
+ 
+ #
 
 # Function for chunking file to send over gRPC
 # The full file is breaken down into chunks and each chunk is then further broken down and iterated over 

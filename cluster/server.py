@@ -15,6 +15,7 @@ import logging
 import hashlib
 import time
 import asyncio
+# TODO: Worked on diff parts at same times, but these two libraries do the same thing LOL
 import requests
 import httpx
 
@@ -33,6 +34,7 @@ def rank(peer_pids, peer_storage):
 
     ranked = sorted(merged, key=lambda x: (x["storage_byte"], x["pid"]))
     return ranked[:3]
+
 class TransferFileService(transfer_file_pb2_grpc.TransferFileServiceServicer):
     def __init__(self, dir_for_files, port):
         self.dir_for_files = dir_for_files
@@ -158,12 +160,7 @@ class HeartBeatService(heartbeat_pb2_grpc.HeartBeatServiceServicer):
     def HeartBeat(self, request, context):
         print("Heartbeat from: ", request.ip_address, " pid:" ,request.pid, "storage in MB: ", request.storage)
         return heartbeat_pb2.HeartBeatResponse(ack=True)
-class ElectionService(election_pb2_grpc.ElectionServiceServicer):
-    def __init__(self, server_node):
-        self.server_node = server_node
 
-    def GetHash(self, request, context):
-        return election_pb2.HashResponse(hash_value=self.server_node._hash_rank) 
 class RankingService(ranking_pb2_grpc.RankingServiceServicer):
     def __init__(self, listen_addr, port):
         self.listen_addr = listen_addr
@@ -208,11 +205,9 @@ class ServerNode:
         self._process_id = os.getpid()
         self._start_time = time.time()
         self._hash_rank = self._get_hash_rank()
-
         self._listen_addr = "0.0.0.0"
         self._listen_port = port 
         self._rest_ip_addr = rest_ip_addr
-        self.peer_addresses = [] 
         self._dir_for_files = f"""/tmp/{self._process_id}-{self._listen_port}"""
         if not os.path.exists(self._dir_for_files):
             os.makedirs(self._dir_for_files)
@@ -224,6 +219,7 @@ class ServerNode:
         self.master_addr: str = self._listen_addr
         self.master_port: str = self._listen_port               
         self.master_rank = self._hash_rank
+        self.election_mode = True 
 
     def _get_hash_rank(self):
         combined = f"{self._process_id}-{self._start_time}".encode()
@@ -249,13 +245,14 @@ class ServerNode:
             self.is_master = True
             self.master_addr = self._listen_addr
             self.master_port = self._listen_port               
+            self.master_rank = self._hash_rank
             for node in registry:
                 async with grpc.aio.insecure_channel(node) as channel:
                     stub = election_pb2_grpc.ElectionServiceStub(channel)
                     try:
                         print(f"Interfacing election with node {node}")
                         response = await stub.GetHash(election_pb2.HashRequest(hash_value=self._hash_rank), timeout=3)
-                        print(f"Response hash_value: {response.hash_value}, self hash rank: {self._hash_rank}")
+                        print(f"Response hash_value: {response.hash_value}, self hash rank: {self.master_rank}")
                         if (response.hash_value > self.master_rank):
                             addr_port = node.split(":")
                             self.master_addr = addr_port[0]
@@ -267,20 +264,39 @@ class ServerNode:
                             print(f"Timeout on calling GetHash on node {node}, is it down?")
                         else:
                             print(f"Error on call {error}")
-            
             if self.is_master:
                 await self.post_new_master(self.master_addr+":"+self.master_port) 
         return
 
-    async def heartBeat(self):
+    async def election_runner(self):
+        while(True):
+            if self.election_mode:
+                await self.election()
+                self.election_mode = False
+            else:
+                await asyncio.sleep(5)
+
+    async def heart_beat(self):
+        # TODO: Pretty ugly nested tabs 
         while(True):
             async with self._master_lock:
                 async with grpc.aio.insecure_channel(self.master_addr+":"+self.master_port) as channel:
                     stub = heartbeat_pb2_grpc.HeartBeatServiceStub(channel)
-                    response = await stub.HeartBeat(heartbeat_pb2.HeartBeatRequest(pid=self._process_id, 
-                                                                                   storage=0, 
-                                                                                   ip_address=self._listen_addr+":"+self._listen_port), timeout=3) 
-                    print(f"""Heart beating {self.master_addr}:{self.master_port} from {self._listen_addr}:{self._listen_port}. ACK = {response.ack}""")
+                    try: 
+                        heart_beat_request = heartbeat_pb2.HeartBeatRequest(
+                            pid=self._process_id, 
+                            storage=0, 
+                            ip_address=self._listen_addr+":"+self._listen_port)
+                        response = await stub.HeartBeat(heart_beat_request, timeout=3) 
+                        print(f"""Heart beating {self.master_addr}:{self.master_port} from {self._listen_addr}:{self._listen_port}. ACK = {response.ack}""")
+                    except grpc.aio.AioRpcError as error:
+                        if error.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                            print(f"Timeout on heartbeating master, is it experiencing heavy traffic?")
+                        if error.code() == grpc.StatusCode.UNAVAILABLE:
+                            print(f"Master node {self.master_addr}:{self.master_port} unreachable, enabling election mode.")
+                            self.election_mode = True
+                        else:
+                            print(f"Error on heartbeat {error}")
             await asyncio.sleep(10)
 
     async def serve(self):
@@ -295,8 +311,8 @@ class ServerNode:
         logging.info("File directory for this server located at %s", self._dir_for_files)
         await server.start()
         await asyncio.sleep(10)
-        asyncio.create_task(self.election())
-        asyncio.create_task(self.heartBeat())
+        asyncio.create_task(self.election_runner())
+        asyncio.create_task(self.heart_beat())
         await server.wait_for_termination()
 
 if __name__ == "__main__":
