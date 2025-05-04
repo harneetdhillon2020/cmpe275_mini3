@@ -9,6 +9,7 @@ service TransferFileService {
 		bytes data = 1;
 		int32 chunk_number = 2;
 		string filename = 3;
+		bool forwarded = 4;
 	}
 
 	message UploadResponse {

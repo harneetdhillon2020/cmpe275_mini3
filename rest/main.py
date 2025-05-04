@@ -11,7 +11,6 @@ app = FastAPI()
 # Default Master Node IP
 master_node_ip = "0.0.0.0:50051"
 
-# Device Registry: TODO: maybe put this in a file later
 registry_ip = [ 
   master_node_ip,
   "0.0.0.0:50052",
