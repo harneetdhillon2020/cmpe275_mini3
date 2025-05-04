@@ -4,6 +4,9 @@ import heartbeat_pb2
 import heartbeat_pb2_grpc
 import transfer_file_pb2
 import transfer_file_pb2_grpc
+import ranking_pb2
+import ranking_pb2_grpc
+from google.protobuf import empty_pb2
 
 import argparse
 import os
@@ -13,36 +16,130 @@ import hashlib
 import time
 import asyncio
 import requests
+import httpx
 
+def rank(peer_pids, peer_storage):
+    merged = []
+    storage_map = {p["peer"]: p for p in peer_storage}
+    
+    for peer in peer_pids:
+        entry = {
+            "peer": peer["peer"],
+            "pid": peer["pid"],
+            "port": peer["port"],
+            "storage_byte": storage_map.get(peer["peer"], {}).get("storage_byte", float("inf"))
+        }
+        merged.append(entry)
+
+    ranked = sorted(merged, key=lambda x: (x["storage_byte"], x["pid"]))
+    return ranked[:3]
 class TransferFileService(transfer_file_pb2_grpc.TransferFileServiceServicer):
-    def __init__(self, dir_for_files):
+    def __init__(self, dir_for_files, port):
         self.dir_for_files = dir_for_files
+        self.port = port
 
-    def UploadFile(self, request_iterator, context):
-        stream_iterator = iter(request_iterator) 
+    async def get_registry_peers(self):
         try:
-            stream_data = next(stream_iterator)
-        except StopIteration:
-            return transfer_file_pb2.UploadResponse(success=False, status_message="Could not parse stream")
-        
-        # First chunk receive should be 0, then we make the filepath off of the filename
-        current_chunk = 0
-        if stream_data.chunk_number == current_chunk:
-            filename = stream_data.filename
-            filepath = f"{self.dir_for_files}/{filename}"
-        else:
-            return transfer_file_pb2.UploadResponse(success=False, status_message="Chunk number not matching")
+            async with httpx.AsyncClient() as client:
+                response = await client.get("http://localhost:8000/registry")
+                all_peers = response.json()
+                self_addr = f"localhost:{self.port}"
+                return [p for p in all_peers if p != self_addr]
+        except Exception as e:
+            print(f"Failed to get peers: {e}")
+            return []
 
-        # Open up a file in the OS and write, each time we write, we should update the chunk number to the next and check if its matching.
-        with open(filepath, "wb") as file_pointer:
-            file_pointer.write(stream_data.data)
-            current_chunk += 1
-            for remaining_chunk in stream_iterator:
-                if (current_chunk != remaining_chunk.chunk_number):
-                    return transfer_file_pb2.UploadResponse(success=False, status_message="Chunk number not matching")
-                file_pointer.write(remaining_chunk.data)
-                current_chunk += 1
-        return transfer_file_pb2.UploadResponse(success=True, status_message="Stream parse finished")
+    async def get_peer_storage(self, peers):
+        results = []
+        for peer in peers:
+            try:
+                async with grpc.aio.insecure_channel(peer) as channel:
+                    stub = ranking_pb2_grpc.RankingServiceStub(channel)
+                    response = await stub.GetStorage(empty_pb2.Empty())
+                    results.append({
+                        "peer": peer,
+                        "pid": response.pid,
+                        "port": response.port,
+                        "storage_byte": response.storage_byte
+                    })
+            except Exception as e:
+                print(f"[Peer: {peer}] Error: {e}")
+        return results
+
+    async def get_peer_pids(self, peers):
+        results = []
+        for peer in peers:
+            try:
+                async with grpc.aio.insecure_channel(peer) as channel:
+                    stub = ranking_pb2_grpc.RankingServiceStub(channel)
+                    response = await stub.GetPid(empty_pb2.Empty())
+                    results.append({
+                        "peer": peer,
+                        "pid": response.pid,
+                        "port": response.port
+                    })
+            except Exception as e:
+                print(f"[Peer: {peer}] Error: {e}")
+        return results
+
+    async def UploadFile(self, request_iterator, context):
+        chunks = []
+        forwarded_flag = False
+
+        async for chunk in request_iterator:
+            chunks.append(chunk)
+            if chunk.chunk_number == 0:
+                forwarded_flag = chunk.forwarded
+
+        if not chunks:
+            return transfer_file_pb2.UploadResponse(success=False, status_message="No data received")
+
+        filename = chunks[0].filename
+        content = b"".join(chunk.data for chunk in chunks)
+
+        if forwarded_flag:
+            filepath = f"{self.dir_for_files}/{filename}"
+            with open(filepath, "wb") as f:
+                f.write(content)
+            print(f"[Forwarded] Saved locally at {filepath}")
+            return transfer_file_pb2.UploadResponse(success=True, status_message="Stored (forwarded)")
+
+        peers = await self.get_registry_peers()
+        peer_pids = await self.get_peer_pids(peers)
+        peer_storage = await self.get_peer_storage(peers)
+        top_nodes = rank(peer_pids, peer_storage)
+
+        if not top_nodes:
+            return transfer_file_pb2.UploadResponse(success=False, status_message="No peers to upload")
+
+        self_addr = f"0.0.0.0:{self.port}"
+        for node in top_nodes:
+            if node["peer"] == self_addr:
+                filepath = f"{self.dir_for_files}/{filename}"
+                with open(filepath, "wb") as f:
+                    f.write(content)
+                print(f"Saved locally at {filepath}")
+            else:
+                try:
+                    async with grpc.aio.insecure_channel(node["peer"]) as channel:
+                        stub = transfer_file_pb2_grpc.TransferFileServiceStub(channel)
+
+                        async def gen_chunks():
+                            chunk_size = 1024 * 1024
+                            for i in range(0, len(content), chunk_size):
+                                yield transfer_file_pb2.UploadRequest(
+                                    data=content[i:i+chunk_size],
+                                    chunk_number=i // chunk_size,
+                                    filename=filename if i == 0 else "",
+                                    forwarded=True
+                                )
+
+                        response = await stub.UploadFile(gen_chunks())
+                        print(f"Uploaded to {node['peer']}: {response.status_message}")
+                except Exception as e:
+                    print(f"Failed to upload to {node['peer']}: {e}")
+
+        return transfer_file_pb2.UploadResponse(success=True, status_message="File uploaded to top 3 nodes")
 
     def DownloadFile(self, request, context):
         filename = request.filename
@@ -61,13 +158,41 @@ class HeartBeatService(heartbeat_pb2_grpc.HeartBeatServiceServicer):
     def HeartBeat(self, request, context):
         print("Heartbeat from: ", request.ip_address, " pid:" ,request.pid, "storage in MB: ", request.storage)
         return heartbeat_pb2.HeartBeatResponse(ack=True)
-
 class ElectionService(election_pb2_grpc.ElectionServiceServicer):
     def __init__(self, server_node):
         self.server_node = server_node
 
     def GetHash(self, request, context):
         return election_pb2.HashResponse(hash_value=self.server_node._hash_rank) 
+class RankingService(ranking_pb2_grpc.RankingServiceServicer):
+    def __init__(self, listen_addr, port):
+        self.listen_addr = listen_addr
+        self.port = port
+
+    def get_storage_used(self, path):
+        total_bytes = 0
+        for dirpath, _, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                if os.path.isfile(fp):
+                    total_bytes += os.path.getsize(fp)
+        return total_bytes
+
+    def GetPid(self, request, context):
+        port = self.port
+        return ranking_pb2.GetPidResponse(
+            pid=os.getpid(),
+            port=port
+        )
+
+    def GetStorage(self, request, context):
+        path = f"/tmp/{os.getpid()}-{self.port}"
+        storage_byte = self.get_storage_used(path)
+        return ranking_pb2.GetStorageResponse(
+            pid=os.getpid(),
+            port=self.port,
+            storage_byte=storage_byte
+        )
 
 class ServerNode:
     def __init__(self, port, rest_ip_addr):
@@ -80,6 +205,7 @@ class ServerNode:
         self._listen_addr = "0.0.0.0"
         self._listen_port = port 
         self._rest_ip_addr = rest_ip_addr
+        self.peer_addresses = [] 
         self._dir_for_files = f"""/tmp/{self._process_id}-{self._listen_port}"""
         if not os.path.exists(self._dir_for_files):
             os.makedirs(self._dir_for_files)
@@ -95,7 +221,6 @@ class ServerNode:
     def _get_hash_rank(self):
         combined = f"{self._process_id}-{self._start_time}".encode()
         return hashlib.sha256(combined).hexdigest()
-
 
     def print_dir_for_files(self) -> None:
         print(self._dir_for_files)
@@ -153,9 +278,10 @@ class ServerNode:
 
     async def serve(self):
         server = grpc.aio.server()
-        transfer_file_pb2_grpc.add_TransferFileServiceServicer_to_server(TransferFileService(self._dir_for_files), server)
+        transfer_file_pb2_grpc.add_TransferFileServiceServicer_to_server(TransferFileService(self._dir_for_files, self._listen_port), server)
         heartbeat_pb2_grpc.add_HeartBeatServiceServicer_to_server(HeartBeatService(), server)
         election_pb2_grpc.add_ElectionServiceServicer_to_server(ElectionService(self), server)
+        ranking_pb2_grpc.add_RankingServiceServicer_to_server(RankingService(self._listen_addr, self._listen_port), server)
         server.add_insecure_port(f"""{self._listen_addr}:{self._listen_port}""")
         logging.info("Starting server on %s , port %s", self._listen_addr, self._listen_port)
         logging.info("File directory for this server located at %s", self._dir_for_files)
