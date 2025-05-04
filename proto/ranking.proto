@@ -1,0 +1,18 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+
+service RankingService {
+  rpc GetPid(google.protobuf.Empty) returns (GetPidResponse) {}
+  rpc GetStorage(google.protobuf.Empty) returns (GetStorageResponse) {}
+}
+
+message GetPidResponse {
+  int32 pid = 1;
+  string port = 2;
+}
+
+message GetStorageResponse {
+  int32 pid = 1;
+  string port = 2;
+  int64 storage_byte = 3;
+}
