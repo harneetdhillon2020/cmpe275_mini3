@@ -194,6 +194,13 @@ class RankingService(ranking_pb2_grpc.RankingServiceServicer):
             storage_byte=storage_byte
         )
 
+class ElectionService(election_pb2_grpc.ElectionServiceServicer):
+    def __init__(self, server_node):
+        self.server_node = server_node
+
+    def GetHash(self, request, context):
+        return election_pb2.HashResponse(hash_value=self.server_node._hash_rank) 
+
 class ServerNode:
     def __init__(self, port, rest_ip_addr):
 
@@ -282,6 +289,7 @@ class ServerNode:
         heartbeat_pb2_grpc.add_HeartBeatServiceServicer_to_server(HeartBeatService(), server)
         election_pb2_grpc.add_ElectionServiceServicer_to_server(ElectionService(self), server)
         ranking_pb2_grpc.add_RankingServiceServicer_to_server(RankingService(self._listen_addr, self._listen_port), server)
+        election_pb2_grpc.add_ElectionServiceServicer_to_server(ElectionService(self), server)
         server.add_insecure_port(f"""{self._listen_addr}:{self._listen_port}""")
         logging.info("Starting server on %s , port %s", self._listen_addr, self._listen_port)
         logging.info("File directory for this server located at %s", self._dir_for_files)
