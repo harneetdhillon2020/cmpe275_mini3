@@ -231,13 +231,13 @@ class ElectionService(election_pb2_grpc.ElectionServiceServicer):
         return election_pb2.HashResponse(hash_value=self.server_node._hash_rank) 
 
 class ServerNode:
-    def __init__(self, port, rest_ip_addr):
+    def __init__(self, ip , port, rest_ip_addr):
 
         # Initialized Immutable Fields. These should not be changed, denoted by _ prefix.
         self._process_id = os.getpid()
         self._start_time = time.time()
         self._hash_rank = self._get_hash_rank()
-        self._listen_addr = "0.0.0.0"
+        self._listen_addr = ip
         self._listen_port = port 
         self._rest_ip_addr = rest_ip_addr
         self._dir_for_files = f"""/tmp/{self._listen_port}"""
@@ -349,9 +349,10 @@ class ServerNode:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--ip", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=str, default="50051")
     parser.add_argument("--rest_ip", type=str, default="0.0.0.0:8000")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(ServerNode(args.port, args.rest_ip).serve())
+    asyncio.run(ServerNode(args.ip, args.port, args.rest_ip).serve())
 
