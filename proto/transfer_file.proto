@@ -15,10 +15,14 @@ service TransferFileService {
 	message UploadResponse {
 		bool success = 1;	
 		string status_message = 2;
+		string storage_location = 3;
 	}
 
 	message DownloadRequest {
 		string filename = 1;
+		string primary_node = 2;
+		string secondary_node = 3;
+		bool is_master = 4;
 	}
 
 	message DownloadResponse {

@@ -4,6 +4,7 @@ import transfer_file_pb2
 import transfer_file_pb2_grpc
 from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.responses import JSONResponse, StreamingResponse
+import json
 
 
 app = FastAPI()
@@ -43,25 +44,71 @@ async def generate_file_chunks(file: UploadFile, filename: str, chunk_size=1024 
 async def upload_txt(file: UploadFile = File(...)):
     if not file.filename.endswith(".txt"):
         return JSONResponse(content={"error": "Only .txt files are allowed"}, status_code=400)
-    
+
+    filename_key = f"{file.filename}"
+
+    try:
+        with open("storage_location.json", "r") as f:
+            existing_data = json.load(f)
+    except FileNotFoundError:
+        existing_data = []
+
+    if any(filename_key in entry for entry in existing_data):
+        return JSONResponse(
+            content={"message": f"File '{filename_key}' already exists. Skipping upload."},
+            status_code=200
+        )
+
     async with grpc.aio.insecure_channel(master_node_ip) as channel:
         stub = transfer_file_pb2_grpc.TransferFileServiceStub(channel)
-        
         response = await stub.UploadFile(generate_file_chunks(file, file.filename))
-        
+
         if response.success:
+            data = {
+                filename_key: {
+                    "main_node": "",
+                    "secondary_node": []
+                }
+            }
+
+            for index, node in enumerate(json.loads(response.storage_location)):
+                if index == 0:
+                    data[filename_key]["main_node"] = node['peer']
+                else:
+                    data[filename_key]["secondary_node"].append(node['peer'])
+
+            existing_data.append(data)
+
+            with open("storage_location.json", "w") as f:
+                json.dump(existing_data, f, indent=4)
+
             return {"message": response.status_message}
         else:
             return JSONResponse(content={"error": response.status_message}, status_code=500)
-        
+
 # client -> server GET Req API Endpt:
 # send .txt file name and file is fetched and downloaded
+def get_nodes(filename, path="storage_location.json"):
+    with open(path, "r") as f:
+        data = json.load(f)
+
+    for entry in data:
+        if filename in entry:
+            primary = entry[filename]["main_node"]
+            secondary = entry[filename]["secondary_node"]
+            secondary = ", ".join(secondary)
+            return primary, secondary
+
+    return None, None
+
 @app.get("/download-txt/{filename}")
 async def download_txt(filename: str):
     async with grpc.aio.insecure_channel(master_node_ip) as channel:
         stub = transfer_file_pb2_grpc.TransferFileServiceStub(channel)
         
-        request = transfer_file_pb2.DownloadRequest(filename=filename)
+        primary_node, secondary_node = get_nodes(filename)
+
+        request = transfer_file_pb2.DownloadRequest(filename=filename, primary_node=primary_node, secondary_node=secondary_node, is_master=True)
         response =  stub.DownloadFile(request)  
         
         file_content = io.BytesIO()

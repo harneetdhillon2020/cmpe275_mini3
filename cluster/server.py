@@ -18,6 +18,7 @@ import asyncio
 # TODO: Worked on diff parts at same times, but these two libraries do the same thing LOL
 import requests
 import httpx
+import json
 
 def rank(peer_pids, peer_storage):
     merged = []
@@ -36,16 +37,18 @@ def rank(peer_pids, peer_storage):
     return ranked[:3]
 
 class TransferFileService(transfer_file_pb2_grpc.TransferFileServiceServicer):
-    def __init__(self, dir_for_files, port):
+    def __init__(self, address, dir_for_files, port, rest_address):
+        self.address = address
+        self.rest_address = rest_address
         self.dir_for_files = dir_for_files
         self.port = port
 
     async def get_registry_peers(self):
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get("http://localhost:8000/registry")
+                response = await client.get(f"http://{self.rest_address}/registry")
                 all_peers = response.json()
-                self_addr = f"localhost:{self.port}"
+                self_addr = f"{self.address}:{self.port}"
                 return [p for p in all_peers if p != self_addr]
         except Exception as e:
             print(f"Failed to get peers: {e}")
@@ -141,21 +144,50 @@ class TransferFileService(transfer_file_pb2_grpc.TransferFileServiceServicer):
                 except Exception as e:
                     print(f"Failed to upload to {node['peer']}: {e}")
 
-        return transfer_file_pb2.UploadResponse(success=True, status_message="File uploaded to top 3 nodes")
+        return transfer_file_pb2.UploadResponse(success=True, status_message="File uploaded to top 3 nodes", storage_location= json.dumps(top_nodes))
 
-    def DownloadFile(self, request, context):
+    async def DownloadFile(self, request, context):
         filename = request.filename
-        filepath = f"{self.dir_for_files}/{filename}"
-        chunk_number = 0
-        chunk_size = 1024*1024
-        with open(filepath, "rb") as file_pointer:
-            while chunk := file_pointer.read(chunk_size):
-                yield transfer_file_pb2.DownloadResponse(
-                    data=chunk,
-                    chunk_number=chunk_number,
-                ) 
-                chunk_number += 1
 
+        if request.is_master == True:
+            all_nodes = [request.primary_node] + request.secondary_node.split(", ")
+
+            for node in all_nodes:
+                try:
+                    async with grpc.aio.insecure_channel(node) as channel:
+                        stub = transfer_file_pb2_grpc.TransferFileServiceStub(channel)
+                        print(f"Foward it to {node}")
+                        forward_request = transfer_file_pb2.DownloadRequest(
+                            filename=filename,
+                            primary_node=request.primary_node,
+                            secondary_node=request.secondary_node,
+                            is_master=False
+                        )
+
+                        async for chunk in stub.DownloadFile(forward_request):
+                            yield chunk
+                        return
+                except grpc.aio.AioRpcError as e:
+                    print(f"Failed to connect to node {node}: {e.details()}")
+                    continue
+
+            context.set_details("File not found on any node.")
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+
+        else:
+            filename = request.filename
+            filepath = f"{self.dir_for_files}/{filename}"
+            chunk_number = 0
+            chunk_size = 1024*1024
+            print("Retrieve the file locally")
+            with open(filepath, "rb") as file_pointer:
+                while chunk := file_pointer.read(chunk_size):
+                    yield transfer_file_pb2.DownloadResponse(
+                        data=chunk,
+                        chunk_number=chunk_number,
+                    ) 
+                    chunk_number += 1
+                    
 class HeartBeatService(heartbeat_pb2_grpc.HeartBeatServiceServicer):
     def HeartBeat(self, request, context):
         print("Heartbeat from: ", request.ip_address, " pid:" ,request.pid, "storage in MB: ", request.storage)
@@ -183,7 +215,7 @@ class RankingService(ranking_pb2_grpc.RankingServiceServicer):
         )
 
     def GetStorage(self, request, context):
-        path = f"/tmp/{os.getpid()}-{self.port}"
+        path = f"/tmp/{self.port}"
         storage_byte = self.get_storage_used(path)
         return ranking_pb2.GetStorageResponse(
             pid=os.getpid(),
@@ -208,7 +240,7 @@ class ServerNode:
         self._listen_addr = "0.0.0.0"
         self._listen_port = port 
         self._rest_ip_addr = rest_ip_addr
-        self._dir_for_files = f"""/tmp/{self._process_id}-{self._listen_port}"""
+        self._dir_for_files = f"""/tmp/{self._listen_port}"""
         if not os.path.exists(self._dir_for_files):
             os.makedirs(self._dir_for_files)
 
@@ -301,7 +333,7 @@ class ServerNode:
 
     async def serve(self):
         server = grpc.aio.server()
-        transfer_file_pb2_grpc.add_TransferFileServiceServicer_to_server(TransferFileService(self._dir_for_files, self._listen_port), server)
+        transfer_file_pb2_grpc.add_TransferFileServiceServicer_to_server(TransferFileService(self._listen_addr, self._dir_for_files, self._listen_port, self._rest_ip_addr), server)
         heartbeat_pb2_grpc.add_HeartBeatServiceServicer_to_server(HeartBeatService(), server)
         election_pb2_grpc.add_ElectionServiceServicer_to_server(ElectionService(self), server)
         ranking_pb2_grpc.add_RankingServiceServicer_to_server(RankingService(self._listen_addr, self._listen_port), server)
