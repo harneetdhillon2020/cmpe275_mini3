@@ -254,8 +254,7 @@ class ServerNode:
         self.election_mode = True 
 
     def _get_hash_rank(self):
-        combined = f"{self._process_id}-{self._start_time}".encode()
-        return hashlib.sha256(combined).hexdigest()
+        return f"{self._start_time}" 
 
     def print_dir_for_files(self) -> None:
         print(self._dir_for_files)
@@ -285,7 +284,7 @@ class ServerNode:
                         print(f"Interfacing election with node {node}")
                         response = await stub.GetHash(election_pb2.HashRequest(hash_value=self._hash_rank), timeout=3)
                         print(f"Response hash_value: {response.hash_value}, self hash rank: {self.master_rank}")
-                        if (response.hash_value > self.master_rank):
+                        if (response.hash_value < self.master_rank):
                             addr_port = node.split(":")
                             self.master_addr = addr_port[0]
                             self.master_port = addr_port[1]
