@@ -190,7 +190,7 @@ class TransferFileService(transfer_file_pb2_grpc.TransferFileServiceServicer):
                     
 class HeartBeatService(heartbeat_pb2_grpc.HeartBeatServiceServicer):
     def HeartBeat(self, request, context):
-        print("Heartbeat from: ", request.ip_address, " pid:" ,request.pid, "storage in MB: ", request.storage)
+        print("Heartbeat from: ", request.ip_address, " pid:" ,request.pid)
         return heartbeat_pb2.HeartBeatResponse(ack=True)
 
 class RankingService(ranking_pb2_grpc.RankingServiceServicer):
